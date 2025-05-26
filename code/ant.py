@@ -86,36 +86,29 @@ class Ant():
 
 
     def __calculateNodeProbabilityChoices(self, current_node):
-        node_probabilities = {}
-        node_partial_probabilities = {}
+        """
+        Visit every edge that directs to
+        outher not visited nodes and
+        uses it's pheromones and desirability
+        to calculate the probability to follow
+        each not visited node.
+
+        returns:
+            Dict: {not visited nodes -> choosing probability}
+        """
+        node_probabilities = dict()
+        node_partial_probabilities = dict()
         probability_sum = 0
-
-        # Filter candidate nodes based on job precedence constraints
-        candidate_nodes = []
+        #Calculates the partial probability to every not followed node edge
         for node in self.not_visited:
-            # Add logic to enforce job precedence (e.g., for the same job, machine i must come before i+1)
-            if self.__is_valid_next_node(current_node, node):
-                candidate_nodes.append(node)
-
-        for node in candidate_nodes:
             desirability = self.G[current_node][node]['desirability']
             pheromone = self.G[current_node][node]['pheromone']
             partial_probability = (pheromone ** self.ALPHA) * (desirability ** self.BETA)
             node_partial_probabilities.update({node : partial_probability})
             probability_sum += partial_probability
-
+        #Calculate full probability over partial probability
         for node in node_partial_probabilities:
             node_probabilities.update({
-                node : node_partial_probabilities[node] / probability_sum
+                node : node_partial_probabilities[node] /  probability_sum
             })
-
         return node_probabilities
-
-    def __is_valid_next_node(self, current_node, next_node):
-        # Add logic to enforce job precedence constraints
-        # Example: For the same job, machine i must come before machine i+1
-        current_job, current_machine = current_node
-        next_job, next_machine = next_node
-        if current_job == next_job:
-            return next_machine == current_machine + 1
-        return True
