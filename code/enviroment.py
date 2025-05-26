@@ -26,7 +26,7 @@ class Enviroment():
             The matrix.
         """        
         jobs = []
-        with open("../test_instances/" + file_name,'r') as file: 
+        with open("test_instances/" + file_name,'r') as file: 
             for line in file: 
                 machines = {}
                 this_machine = None
