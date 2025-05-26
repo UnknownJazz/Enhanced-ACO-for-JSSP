@@ -1,96 +1,128 @@
-from enviroment import Enviroment
+from enviroment import Enviroment # Corrected typo: environment
 from ant import Ant
-import copy
+# import copy # Not used
 from statistics import mean, stdev
 import json
-import numpy as np
-
+# import numpy as np # Not directly used in this file
 
 class ACO():
-    """
-    Class responsible to manage the
-    entire proccess. 
-    It creates and executes the graph enviroment
-    all the ants, updates the pheromones and 
-    at the registers the best solution found.
-
-    returns:
-        Best Makespam time of critical path.
-        Sequence Job/Machine for this path.
-    """ 
-
-    def __init__(self, ALPHA, BETA, dataset, cycles, ant_numbers, init_pheromone, pheromone_constant, min_pheromone, evaporation_rate, seed):
-        self.ALPHA = ALPHA
-        self.ant_numbers = ant_numbers
+    def __init__(self, ALPHA_JS, ALPHA_MA, BETA, dataset, cycles, ant_numbers, 
+                 init_pheromone_js, init_pheromone_ma, 
+                 pheromone_constant_js, pheromone_constant_ma,
+                 min_pheromone_js, min_pheromone_ma, 
+                 evaporation_rate_js, evaporation_rate_ma, seed):
+        
+        self.ALPHA_JS = ALPHA_JS
+        self.ALPHA_MA = ALPHA_MA
         self.BETA = BETA
         self.cycles = cycles
-        self.pheromone_constant = pheromone_constant
-        self.evaporation_rate = evaporation_rate
+        self.ant_numbers = ant_numbers
+        self.pheromone_constant_js = pheromone_constant_js
+        self.pheromone_constant_ma = pheromone_constant_ma
+        self.evaporation_rate_js = evaporation_rate_js
+        self.evaporation_rate_ma = evaporation_rate_ma
         self.seed = seed
 
-        #Inicialize the Enviroment and set data
-        self.enviroment = Enviroment(dataset, init_pheromone, min_pheromone)
-        self.time_of_executions = self.enviroment.getTimeOfExecutions()
-        self.node_names = self.enviroment.getNodeNames()
-        self.graph_edges = self.enviroment.getEdges()
-    
+        # Initialize the Environment and set data
+        self.enviroment = Enviroment(dataset, init_pheromone_js, init_pheromone_ma, 
+                                     min_pheromone_js, min_pheromone_ma)
+        
+        self.operation_node_ids = self.enviroment.getOperationNodeIDs() # List of (j,k) tuples
+        self.graph_edges = self.enviroment.getEdges() # List of actual edge tuples
 
     def releaseTheAnts(self):
-        """
-        Method responsible to create
-        and execute all ants through
-        the enviroment and update
-        the pheromones.
-
-        returns:
-            - Print the best time.
-            - Generate a file with the 
-                time results of all cycles
-                with this structure:
-                {cycle : [Fastest, Mean, Longest], ...}
-        """
         results_control = {}
-        all_times = []
-        fastest_path = []
+        all_times_overall = [] # To store makespans from all ants across all cycles
+        best_overall_time = float('inf')
+        best_overall_path_nodes = []
+
         for cycle_number in range(self.cycles):
             this_cycle_times = []
-            #Get the updated graph:
-            this_cycle_Graph = self.enviroment.getGraph()
-            #Create dict with each edge as a key and all values as zeros,
-            #  so it can sum all edges contribution along this cycle:
-            this_cycle_edges_contributions = dict.fromkeys(self.graph_edges,0) 
+            # Get the current graph (pheromones might have changed)
+            current_graph_state = self.enviroment.getGraph() 
+            
+            # For accumulating pheromone contributions in this cycle
+            this_cycle_contributions_js = {edge: 0.0 for edge in self.graph_edges}
+            this_cycle_contributions_ma = {edge: 0.0 for edge in self.graph_edges}
 
-            for ant_number in range(self.ant_numbers):
-                #Create Ant, make it walk through the graph and calculate makespan time for that walk
-                ant = Ant(this_cycle_Graph, self.node_names, self.ALPHA, self.BETA, self.seed, extended_seed=ant_number)
-                ant_path = ant.walk()
-                path_time = self.enviroment.calculateMakespanTime(ant_path)
-                #Recording the pheromone contribution for each edge of this walk
-                for edge in ant_path:
-                    this_cycle_edges_contributions[edge] += self.pheromone_constant/path_time
-                #Recording cycle values:
+            for ant_idx in range(self.ant_numbers):
+                ant = Ant(current_graph_state, self.operation_node_ids, # Pass (j,k) op ids
+                          self.ALPHA_JS, self.ALPHA_MA, self.BETA, 
+                          self.seed, extended_seed=cycle_number * self.ant_numbers + ant_idx) # Unique seed per ant
+                
+                # ant_path_edges: sequence of ((u,v),(x,y)) tuples defining path
+                # ant_path_nodes_sequence: sequence of (j,k) operations chosen by ant
+                ant_path_edges, ant_path_nodes_sequence = ant.walk()
+                
+                if not ant_path_nodes_sequence : # Ant failed to find a complete path
+                    # print(f"Warning: Ant {ant_idx} in cycle {cycle_number} did not produce a valid path.")
+                    path_time = float('inf') # Penalize incomplete paths
+                else:
+                    path_time = self.enviroment.calculateMakespanTime(ant_path_nodes_sequence)
+
                 this_cycle_times.append(path_time)
-                all_times.append(path_time)
+                all_times_overall.append(path_time)
 
-            #Update pheromone on edges of the graph
+                if path_time < best_overall_time:
+                    best_overall_time = path_time
+                    best_overall_path_nodes = ant_path_nodes_sequence
+                
+                # Pheromone contribution: only if path is valid (finite time)
+                if path_time != float('inf') and path_time > 0 : # path_time > 0 for safety with division
+                    for edge in ant_path_edges: # Edges are ((prev_op), (curr_op))
+                        # Ensure edge exists in contributions dict (should if graph_edges is comprehensive)
+                        if edge in this_cycle_contributions_js:
+                             this_cycle_contributions_js[edge] += self.pheromone_constant_js / path_time
+                             this_cycle_contributions_ma[edge] += self.pheromone_constant_ma / path_time
+                        # else:
+                            # This can happen if an ant traverses an edge not initially in self.graph_edges
+                            # (e.g., if graph is dynamic or ant can create edges - not the case here).
+                            # Or if self.graph_edges was not exhaustive from G.edges() initially.
+                            # print(f"Warning: Edge {edge} from ant path not in contributions dict.")
+
+
+            # Update pheromones on all edges in the graph
             self.enviroment.updatePheromone(
-                self.evaporation_rate,
-                this_cycle_edges_contributions)
+                self.evaporation_rate_js, self.evaporation_rate_ma,
+                this_cycle_contributions_js, this_cycle_contributions_ma
+            )
 
-            #save recorded values
-            results_control.update(
-                {cycle_number : [
-                            min(this_cycle_times),
-                            mean(this_cycle_times),
-                            max(this_cycle_times)
-            ]})
+            # Save recorded values for this cycle
+            if this_cycle_times: # Ensure list is not empty
+                 results_control[cycle_number] = [
+                    min(this_cycle_times) if any(t != float('inf') for t in this_cycle_times) else float('inf'), # Handle all inf
+                    mean(t for t in this_cycle_times if t != float('inf')) if any(t != float('inf') for t in this_cycle_times) else float('inf'),
+                    max(t for t in this_cycle_times if t != float('inf')) if any(t != float('inf') for t in this_cycle_times) else float('inf')
+                ]
+            else: # Should not happen if ant_numbers > 0
+                results_control[cycle_number] = [float('inf'), float('inf'), float('inf')]
+            
+            print(f"Cycle {cycle_number+1}/{self.cycles} | Min: {results_control[cycle_number][0]:.2f}, Mean: {results_control[cycle_number][1]:.2f}, Max: {results_control[cycle_number][2]:.2f} | Overall Best: {best_overall_time:.2f}")
 
-        #generating file with fitness through cycles
-        json.dump( results_control, open( "ACO_cycles_results.json", 'w' ) )
-        #Print results:
+
+        # Generating file with fitness through cycles
+        try:
+            with open("ACO_cycles_results.json", 'w') as f:
+                json.dump(results_control, f, indent=4)
+        except Exception as e:
+            print(f"Error saving results to JSON: {e}")
+
+        # Print final results
         print("---------------------------------------------------")
-        print("Mean: ", mean(all_times))
-        print("Standard deviation: ", stdev(all_times))
-        print("BEST PATH TIME: ", min(all_times), " seconds")
+        valid_overall_times = [t for t in all_times_overall if t != float('inf')]
+        if valid_overall_times:
+            print(f"Mean of all valid makespans: {mean(valid_overall_times):.2f}")
+            if len(valid_overall_times) > 1:
+                print(f"Standard deviation of valid makespans: {stdev(valid_overall_times):.2f}")
+            else:
+                print("Standard deviation: N/A (less than 2 valid times)")
+            print(f"BEST OVERALL MAKESPAN: {best_overall_time:.2f}")
+            # print(f"Best path (sequence of operations (job, op_idx)): {best_overall_path_nodes}")
+        else:
+            print("No valid solutions found across all cycles.")
         print("---------------------------------------------------")
- 
+        
+        # Optionally print the graph at the end
+        # self.enviroment.printGraph()
+        
+        return best_overall_time, best_overall_path_nodes
